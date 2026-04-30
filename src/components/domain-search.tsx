@@ -3,12 +3,141 @@
 import { useState, useRef, useEffect } from "react";
 
 const ALL_TLDS = [".com", ".ai", ".io", ".dev", ".app", ".co", ".xyz", ".tech"];
+const KEY_STORAGE = "openai_api_key";
 
 type Mode = "domain" | "business";
 
 interface DomainResult {
   domain: string;
   available: boolean;
+}
+
+function maskKey(key: string): string {
+  if (key.length <= 12) return key;
+  return `${key.slice(0, 7)}…${key.slice(-4)}`;
+}
+
+function ApiKeyPanel({
+  apiKey,
+  onSave,
+  onClear,
+}: {
+  apiKey: string | null;
+  onSave: (key: string) => void;
+  onClear: () => void;
+}) {
+  const [editing, setEditing] = useState(!apiKey);
+  const [value, setValue] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!apiKey) setEditing(true);
+  }, [apiKey]);
+
+  const handleSave = () => {
+    const trimmed = value.trim();
+    if (!trimmed.startsWith("sk-")) {
+      setError("OpenAI keys start with 'sk-'.");
+      return;
+    }
+    setError(null);
+    onSave(trimmed);
+    setValue("");
+    setEditing(false);
+  };
+
+  if (!editing && apiKey) {
+    return (
+      <div className="mb-4 flex items-center justify-between rounded-xl border border-foreground/10 bg-foreground/[0.03] px-4 py-2.5">
+        <div className="flex items-center gap-2 text-sm">
+          <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-semibold text-emerald-600">
+            Key set
+          </span>
+          <span className="font-mono text-xs text-foreground/50">
+            {maskKey(apiKey)}
+          </span>
+        </div>
+        <div className="flex gap-1">
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="rounded-md px-2 py-1 text-xs font-medium text-foreground/60 hover:bg-foreground/[0.06] hover:text-foreground"
+          >
+            Change
+          </button>
+          <button
+            type="button"
+            onClick={onClear}
+            className="rounded-md px-2 py-1 text-xs font-medium text-foreground/60 hover:bg-red-500/10 hover:text-red-500"
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-4 rounded-xl border border-foreground/10 bg-foreground/[0.03] p-4">
+      <div className="mb-2 flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-foreground">
+          Your OpenAI API key
+        </h2>
+        <a
+          href="https://platform.openai.com/api-keys"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-xs text-foreground/50 underline-offset-2 hover:text-foreground/80 hover:underline"
+        >
+          Get a key →
+        </a>
+      </div>
+      <p className="mb-3 text-xs leading-relaxed text-foreground/50">
+        Stored only in your browser. Sent per request to this server to call
+        OpenAI on your behalf — never logged, never persisted server-side.
+      </p>
+      <div className="flex gap-2">
+        <input
+          type="password"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              handleSave();
+            }
+          }}
+          placeholder="sk-..."
+          className="flex-1 rounded-lg border border-foreground/10 bg-background px-3 py-2 font-mono text-sm outline-none focus:border-foreground/30"
+          autoFocus
+        />
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={!value.trim()}
+          className="rounded-lg bg-foreground px-4 py-2 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-40"
+        >
+          Save
+        </button>
+        {apiKey && (
+          <button
+            type="button"
+            onClick={() => {
+              setEditing(false);
+              setValue("");
+              setError(null);
+            }}
+            className="rounded-lg px-3 py-2 text-sm font-medium text-foreground/60 hover:text-foreground"
+          >
+            Cancel
+          </button>
+        )}
+      </div>
+      {error && (
+        <p className="mt-2 text-xs text-red-500">{error}</p>
+      )}
+    </div>
+  );
 }
 
 function SkeletonRow() {
@@ -80,6 +209,7 @@ function DomainRow({ result }: { result: DomainResult }) {
 }
 
 export function DomainSearch() {
+  const [apiKey, setApiKey] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>("domain");
   const [query, setQuery] = useState("");
   const [businessIdea, setBusinessIdea] = useState("");
@@ -90,11 +220,41 @@ export function DomainSearch() {
     "idle" | "exact" | "suggestions" | "done"
   >("idle");
   const [stats, setStats] = useState({ total: 0, available: 0 });
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<
     "all" | "available" | "taken"
   >("all");
   const [tldFilters, setTldFilters] = useState<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(KEY_STORAGE);
+      if (stored) setApiKey(stored);
+    } catch {
+      // localStorage unavailable (private mode etc.) — user can still paste each time.
+    }
+  }, []);
+
+  const handleSaveKey = (key: string) => {
+    try {
+      localStorage.setItem(KEY_STORAGE, key);
+    } catch {
+      // ignore
+    }
+    setApiKey(key);
+    setErrorMessage(null);
+  };
+
+  const handleClearKey = () => {
+    try {
+      localStorage.removeItem(KEY_STORAGE);
+    } catch {
+      // ignore
+    }
+    setApiKey(null);
+    resetResults();
+  };
 
   const toggleTld = (tld: string) => {
     setTldFilters((prev) => {
@@ -114,9 +274,14 @@ export function DomainSearch() {
     setSuggestions([]);
     setBaseName("");
     setStats({ total: 0, available: 0 });
+    setErrorMessage(null);
   };
 
   const search = async (q: string, searchMode: Mode) => {
+    if (!apiKey) {
+      setErrorMessage("Add your OpenAI API key above to start searching.");
+      return;
+    }
     if (!q.trim()) {
       resetResults();
       return;
@@ -130,16 +295,33 @@ export function DomainSearch() {
     setExactResults([]);
     setSuggestions([]);
     setStats({ total: 0, available: 0 });
+    setErrorMessage(null);
 
     try {
       const res = await fetch("/api/search", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-openai-key": apiKey,
+        },
         body: JSON.stringify({ query: q.trim(), mode: searchMode }),
         signal: controller.signal,
       });
 
-      if (!res.ok || !res.body) throw new Error("Search failed");
+      if (!res.ok) {
+        let message = "Search failed.";
+        try {
+          const data = await res.json();
+          message = data.error || message;
+        } catch {
+          // ignore
+        }
+        setErrorMessage(message);
+        setPhase("idle");
+        return;
+      }
+
+      if (!res.body) throw new Error("No response stream");
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -165,12 +347,16 @@ export function DomainSearch() {
             setSuggestions(data.results);
             setStats({ total: data.total, available: data.available });
             setPhase("done");
+          } else if (data.type === "error") {
+            setErrorMessage(data.message);
+            setPhase("done");
           }
         }
       }
     } catch (error: unknown) {
       if ((error as Error).name !== "AbortError") {
         console.error("Search error:", error);
+        setErrorMessage("Search failed. Please try again.");
         setPhase("idle");
       }
     }
@@ -184,11 +370,14 @@ export function DomainSearch() {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    // Cmd/Ctrl+Enter submits the textarea; plain Enter still submits the input.
     if (mode === "domain" && e.key === "Enter") {
       e.preventDefault();
       search(query, "domain");
-    } else if (mode === "business" && e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+    } else if (
+      mode === "business" &&
+      e.key === "Enter" &&
+      (e.metaKey || e.ctrlKey)
+    ) {
       e.preventDefault();
       search(businessIdea, "business");
     }
@@ -220,11 +409,17 @@ export function DomainSearch() {
 
   const isLoading = phase === "exact" || phase === "suggestions";
   const hasResults = phase === "suggestions" || phase === "done";
-  const showExactSection = mode === "domain" && hasResults && exactResults.length > 0;
+  const showExactSection =
+    mode === "domain" && hasResults && exactResults.length > 0;
 
   return (
     <div>
-      {/* Mode toggle */}
+      <ApiKeyPanel
+        apiKey={apiKey}
+        onSave={handleSaveKey}
+        onClear={handleClearKey}
+      />
+
       <div className="mb-3 flex justify-center">
         <div className="inline-flex gap-1 rounded-xl bg-foreground/[0.04] p-1">
           {(
@@ -249,7 +444,6 @@ export function DomainSearch() {
         </div>
       </div>
 
-      {/* Input */}
       <form onSubmit={handleSubmit} className="relative">
         {mode === "domain" ? (
           <>
@@ -260,11 +454,10 @@ export function DomainSearch() {
               onKeyDown={handleKeyDown}
               placeholder="Search a domain... e.g. aiunicorn.com"
               className="w-full rounded-2xl border border-foreground/10 bg-foreground/[0.03] px-5 py-4 pr-28 text-lg text-foreground outline-none transition-all placeholder:text-foreground/30 focus:border-foreground/20 focus:ring-2 focus:ring-foreground/5"
-              autoFocus
             />
             <button
               type="submit"
-              disabled={!query.trim() || isLoading}
+              disabled={!query.trim() || isLoading || !apiKey}
               className="absolute right-2 top-1/2 -translate-y-1/2 rounded-xl bg-foreground px-5 py-2.5 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-40"
             >
               {isLoading ? "Searching..." : "Search"}
@@ -279,14 +472,13 @@ export function DomainSearch() {
               placeholder="Describe your business... e.g. AI-powered fitness coaching app for busy professionals who want personalized workouts"
               rows={4}
               className="w-full resize-none rounded-2xl border border-foreground/10 bg-foreground/[0.03] px-5 py-4 pb-14 text-base text-foreground outline-none transition-all placeholder:text-foreground/30 focus:border-foreground/20 focus:ring-2 focus:ring-foreground/5"
-              autoFocus
             />
             <div className="absolute bottom-3 left-5 text-xs text-foreground/30">
               ⌘+Enter to generate
             </div>
             <button
               type="submit"
-              disabled={!businessIdea.trim() || isLoading}
+              disabled={!businessIdea.trim() || isLoading || !apiKey}
               className="absolute bottom-3 right-3 rounded-xl bg-foreground px-5 py-2 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-40"
             >
               {isLoading ? "Generating..." : "Generate"}
@@ -295,7 +487,12 @@ export function DomainSearch() {
         )}
       </form>
 
-      {/* Loading: Exact match phase */}
+      {errorMessage && (
+        <div className="mt-3 rounded-lg border border-red-500/20 bg-red-500/[0.06] px-4 py-3 text-sm text-red-600">
+          {errorMessage}
+        </div>
+      )}
+
       {phase === "exact" && (
         <div>
           {mode === "domain" && (
@@ -312,7 +509,6 @@ export function DomainSearch() {
         </div>
       )}
 
-      {/* Stats + Status Filter */}
       {hasResults && (
         <div className="mt-5 flex items-center justify-between">
           <p className="text-sm text-foreground/50">
@@ -351,7 +547,6 @@ export function DomainSearch() {
         </div>
       )}
 
-      {/* TLD Filter */}
       {hasResults && (
         <div className="mt-3 flex flex-wrap gap-1.5">
           {ALL_TLDS.map((tld) => {
@@ -381,7 +576,6 @@ export function DomainSearch() {
         </div>
       )}
 
-      {/* Exact Match Section */}
       {showExactSection && (
         <div className="mt-5">
           <div className="mb-3 flex items-center gap-2">
@@ -399,7 +593,6 @@ export function DomainSearch() {
         </div>
       )}
 
-      {/* Loading: AI suggestions phase */}
       {phase === "suggestions" && (
         <SkeletonBlock
           count={10}
@@ -411,7 +604,6 @@ export function DomainSearch() {
         />
       )}
 
-      {/* AI Suggestions Section */}
       {phase === "done" && suggestions.length > 0 && (
         <div className="mt-6">
           <div className="mb-3 flex items-center gap-2">

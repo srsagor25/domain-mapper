@@ -4,7 +4,11 @@ import {
   generateExactDomains,
   expandWithTLDs,
 } from "@/lib/name-generator";
-import { generateAINames, generateNamesFromBusiness } from "@/lib/ai";
+import {
+  generateAINames,
+  generateNamesFromBusiness,
+  OpenAIKeyError,
+} from "@/lib/ai";
 import { checkDomains, DomainResult } from "@/lib/domain-checker";
 
 // In-memory cache (24h TTL)
@@ -67,88 +71,90 @@ function sortByAvailability(results: DomainResult[]): DomainResult[] {
   return sortedGroups.flatMap(([, results]) => results);
 }
 
+function jsonError(message: string, status: number): Response {
+  return new Response(JSON.stringify({ error: message }), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 export async function POST(request: NextRequest) {
   try {
+    const apiKey = request.headers.get("x-openai-key")?.trim();
+    if (!apiKey) {
+      return jsonError(
+        "Missing OpenAI API key. Add your key in the app to continue.",
+        401
+      );
+    }
+    if (!apiKey.startsWith("sk-")) {
+      return jsonError(
+        "OpenAI API keys should start with 'sk-'. Please check the value.",
+        400
+      );
+    }
+
     const { query, mode } = await request.json();
 
     if (!query || typeof query !== "string" || query.trim().length === 0) {
-      return new Response(JSON.stringify({ error: "Query is required" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      });
+      return jsonError("Query is required", 400);
     }
 
     const isBusinessMode = mode === "business";
     const trimmedQuery = query.trim();
 
-    // In business mode we skip exact-match generation entirely — a long
-    // business description doesn't make a useful exact domain.
     let baseName = "";
     if (!isBusinessMode) {
       const parsed = parseInput(trimmedQuery);
       baseName = parsed.baseName;
-      if (!baseName) {
-        return new Response(JSON.stringify({ error: "Invalid query" }), {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
+      if (!baseName) return jsonError("Invalid query", 400);
     }
 
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
+        const send = (payload: unknown) => {
+          controller.enqueue(encoder.encode(JSON.stringify(payload) + "\n"));
+        };
+
         let exactResults: DomainResult[] = [];
 
         if (!isBusinessMode) {
-          // Phase 1: Exact match — fast DNS check
           const exactDomains = generateExactDomains(baseName);
           exactResults = await checkWithCache(exactDomains);
-
-          controller.enqueue(
-            encoder.encode(
-              JSON.stringify({
-                type: "exact",
-                baseName,
-                results: exactResults,
-              }) + "\n"
-            )
-          );
+          send({ type: "exact", baseName, results: exactResults });
         } else {
-          // Tell the client to skip straight to suggestions UI.
-          controller.enqueue(
-            encoder.encode(
-              JSON.stringify({
-                type: "exact",
-                baseName: "",
-                results: [],
-              }) + "\n"
-            )
-          );
+          send({ type: "exact", baseName: "", results: [] });
         }
 
-        // Phase 2: AI-powered suggestions
-        const aiNames = isBusinessMode
-          ? await generateNamesFromBusiness(trimmedQuery)
-          : await generateAINames(trimmedQuery);
+        let aiNames: string[] = [];
+        try {
+          aiNames = isBusinessMode
+            ? await generateNamesFromBusiness(trimmedQuery, apiKey)
+            : await generateAINames(trimmedQuery, apiKey);
+        } catch (err) {
+          const message =
+            err instanceof OpenAIKeyError
+              ? err.message
+              : "Failed to generate names. Please try again.";
+          send({ type: "error", message });
+          controller.close();
+          return;
+        }
 
         const uniqueNames = aiNames.filter((name) => name !== baseName);
         const suggestionDomains = expandWithTLDs(uniqueNames);
         const suggestionResults = await checkWithCache(suggestionDomains);
         const sortedResults = sortByAvailability(suggestionResults);
 
-        controller.enqueue(
-          encoder.encode(
-            JSON.stringify({
-              type: "suggestions",
-              results: sortedResults,
-              total: exactResults.length + sortedResults.length,
-              available:
-                exactResults.filter((r) => r.available).length +
-                sortedResults.filter((r) => r.available).length,
-            }) + "\n"
-          )
-        );
+        send({
+          type: "suggestions",
+          results: sortedResults,
+          total: exactResults.length + sortedResults.length,
+          available:
+            exactResults.filter((r) => r.available).length +
+            sortedResults.filter((r) => r.available).length,
+        });
 
         controller.close();
       },
@@ -161,12 +167,6 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch {
-    return new Response(
-      JSON.stringify({ error: "Internal server error" }),
-      {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      }
-    );
+    return jsonError("Internal server error", 500);
   }
 }

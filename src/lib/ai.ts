@@ -1,7 +1,5 @@
 import OpenAI from "openai";
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
 const MODEL = "gpt-4o-mini";
 
 function sanitizeNames(text: string): string[] {
@@ -34,48 +32,54 @@ DO NOT generate names that read like ad copy or SEO phrases.
 
 Output format: one name per line. No numbering, no TLDs, no explanations, no headings.`;
 
-export async function generateAINames(seed: string): Promise<string[]> {
-  try {
-    const completion = await client.chat.completions.create({
-      model: MODEL,
-      temperature: 0.9,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        {
-          role: "user",
-          content: `Someone is searching for the domain "${seed}". Infer the intent — what they're building, the vibe, the industry — and generate 30 alternative brand names that capture the same energy.`,
-        },
-      ],
-    });
-
-    const text = completion.choices[0]?.message?.content ?? "";
-    return sanitizeNames(text);
-  } catch (error) {
-    console.error("OpenAI API error (generateAINames):", error);
-    return [];
+export class OpenAIKeyError extends Error {
+  status: number;
+  constructor(message: string, status = 401) {
+    super(message);
+    this.name = "OpenAIKeyError";
+    this.status = status;
   }
 }
 
-export async function generateNamesFromBusiness(
-  description: string
-): Promise<string[]> {
+async function callOpenAI(apiKey: string, userPrompt: string): Promise<string[]> {
+  const client = new OpenAI({ apiKey });
   try {
     const completion = await client.chat.completions.create({
       model: MODEL,
       temperature: 0.9,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        {
-          role: "user",
-          content: `Here is the business idea / offer:\n"""\n${description}\n"""\n\nIdentify the audience, value proposition, industry, and emotional hook. Then generate 40 brandable name candidates a founder would actually use as their company name.`,
-        },
+        { role: "user", content: userPrompt },
       ],
     });
-
-    const text = completion.choices[0]?.message?.content ?? "";
-    return sanitizeNames(text);
-  } catch (error) {
-    console.error("OpenAI API error (generateNamesFromBusiness):", error);
-    return [];
+    return sanitizeNames(completion.choices[0]?.message?.content ?? "");
+  } catch (err: unknown) {
+    // Map OpenAI errors to a clear typed error so the route can surface them.
+    const e = err as { status?: number; message?: string };
+    const status = e.status ?? 500;
+    const message =
+      status === 401
+        ? "Invalid OpenAI API key. Double-check the key and try again."
+        : status === 429
+          ? "OpenAI rate limit or quota exceeded for your key."
+          : e.message || "OpenAI request failed.";
+    throw new OpenAIKeyError(message, status);
   }
+}
+
+export function generateAINames(seed: string, apiKey: string): Promise<string[]> {
+  return callOpenAI(
+    apiKey,
+    `Someone is searching for the domain "${seed}". Infer the intent — what they're building, the vibe, the industry — and generate 30 alternative brand names that capture the same energy.`
+  );
+}
+
+export function generateNamesFromBusiness(
+  description: string,
+  apiKey: string
+): Promise<string[]> {
+  return callOpenAI(
+    apiKey,
+    `Here is the business idea / offer:\n"""\n${description}\n"""\n\nIdentify the audience, value proposition, industry, and emotional hook. Then generate 40 brandable name candidates a founder would actually use as their company name.`
+  );
 }
