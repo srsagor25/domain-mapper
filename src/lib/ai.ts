@@ -1,32 +1,25 @@
 import OpenAI from "openai";
-import Anthropic from "@anthropic-ai/sdk";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 
-export type Provider = "openai" | "anthropic" | "google";
+// OpenRouter exposes an OpenAI-compatible API.
+const client = new OpenAI({
+  apiKey: process.env.OPENROUTER_API_KEY,
+  baseURL: "https://openrouter.ai/api/v1",
+  defaultHeaders: {
+    "HTTP-Referer":
+      process.env.OPENROUTER_REFERER || "https://domain-mapper-lovat.vercel.app",
+    "X-Title": "Domain Mapper",
+  },
+});
 
-export const PROVIDERS: Provider[] = ["openai", "anthropic", "google"];
+// OpenRouter free-tier model. Override with OPENROUTER_MODEL if needed.
+const MODEL =
+  process.env.OPENROUTER_MODEL || "meta-llama/llama-3.3-70b-instruct:free";
 
-export function isProvider(v: unknown): v is Provider {
-  return v === "openai" || v === "anthropic" || v === "google";
-}
-
-const PROVIDER_MODEL: Record<Provider, string> = {
-  openai: "gpt-4o-mini",
-  anthropic: "claude-haiku-4-5-20251001",
-  google: "gemini-2.0-flash",
-};
-
-const PROVIDER_NAME: Record<Provider, string> = {
-  openai: "OpenAI",
-  anthropic: "Anthropic",
-  google: "Google",
-};
-
-export class AIKeyError extends Error {
+export class AIError extends Error {
   status: number;
-  constructor(message: string, status = 401) {
+  constructor(message: string, status = 500) {
     super(message);
-    this.name = "AIKeyError";
+    this.name = "AIError";
     this.status = status;
   }
 }
@@ -65,106 +58,53 @@ function sanitizeNames(text: string): string[] {
     .filter((name) => name.length >= 3 && name.length <= 16);
 }
 
-async function callOpenAI(apiKey: string, userPrompt: string): Promise<string> {
-  const client = new OpenAI({ apiKey });
-  const completion = await client.chat.completions.create({
-    model: PROVIDER_MODEL.openai,
-    temperature: 0.9,
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: userPrompt },
-    ],
-  });
-  return completion.choices[0]?.message?.content ?? "";
-}
+async function callModel(userPrompt: string): Promise<string[]> {
+  if (!process.env.OPENROUTER_API_KEY) {
+    throw new AIError(
+      "Server is missing OPENROUTER_API_KEY. Contact the administrator.",
+      503
+    );
+  }
 
-async function callAnthropic(apiKey: string, userPrompt: string): Promise<string> {
-  const client = new Anthropic({ apiKey });
-  const message = await client.messages.create({
-    model: PROVIDER_MODEL.anthropic,
-    max_tokens: 1024,
-    temperature: 0.9,
-    system: SYSTEM_PROMPT,
-    messages: [{ role: "user", content: userPrompt }],
-  });
-  const textBlock = message.content.find((b) => b.type === "text");
-  return textBlock && textBlock.type === "text" ? textBlock.text : "";
-}
-
-async function callGoogle(apiKey: string, userPrompt: string): Promise<string> {
-  const client = new GoogleGenerativeAI(apiKey);
-  const model = client.getGenerativeModel({
-    model: PROVIDER_MODEL.google,
-    systemInstruction: SYSTEM_PROMPT,
-  });
-  const result = await model.generateContent({
-    contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-    generationConfig: { temperature: 0.9 },
-  });
-  return result.response.text();
-}
-
-async function callProvider(
-  provider: Provider,
-  apiKey: string,
-  userPrompt: string
-): Promise<string[]> {
   try {
-    let text: string;
-    if (provider === "openai") text = await callOpenAI(apiKey, userPrompt);
-    else if (provider === "anthropic") text = await callAnthropic(apiKey, userPrompt);
-    else text = await callGoogle(apiKey, userPrompt);
+    const completion = await client.chat.completions.create({
+      model: MODEL,
+      temperature: 0.9,
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: userPrompt },
+      ],
+    });
+    const text = completion.choices[0]?.message?.content ?? "";
     return sanitizeNames(text);
   } catch (err: unknown) {
     const e = err as { status?: number; message?: string };
+    const status = e.status ?? 500;
     const msg = (e.message || "").toLowerCase();
-    const name = PROVIDER_NAME[provider];
 
     let message: string;
-    if (
-      e.status === 401 ||
-      e.status === 403 ||
-      msg.includes("api_key_invalid") ||
-      msg.includes("api key not valid") ||
-      msg.includes("invalid api key") ||
-      msg.includes("incorrect api key")
-    ) {
-      message = `Invalid ${name} API key. Double-check the key and try again.`;
-    } else if (
-      e.status === 429 ||
-      msg.includes("rate limit") ||
-      msg.includes("quota")
-    ) {
-      message = `${name} rate limit or quota exceeded for your key.`;
+    if (status === 401 || status === 403) {
+      message = "Server's OpenRouter key is invalid. Contact the administrator.";
+    } else if (status === 429 || msg.includes("rate") || msg.includes("quota")) {
+      message =
+        "OpenRouter rate limit hit. Free-tier models share quota — try again in a moment.";
     } else {
-      message = e.message
-        ? `${name} request failed: ${e.message}`
-        : `${name} request failed.`;
+      message = "Failed to generate names. Please try again.";
     }
-    throw new AIKeyError(message, e.status ?? 500);
+    throw new AIError(message, status);
   }
 }
 
-export function generateAINames(
-  seed: string,
-  provider: Provider,
-  apiKey: string
-): Promise<string[]> {
-  return callProvider(
-    provider,
-    apiKey,
+export function generateAINames(seed: string): Promise<string[]> {
+  return callModel(
     `Someone is searching for the domain "${seed}". Infer the intent — what they're building, the vibe, the industry — and generate 30 alternative brand names that capture the same energy.`
   );
 }
 
 export function generateNamesFromBusiness(
-  description: string,
-  provider: Provider,
-  apiKey: string
+  description: string
 ): Promise<string[]> {
-  return callProvider(
-    provider,
-    apiKey,
+  return callModel(
     `Here is the business idea / offer:\n"""\n${description}\n"""\n\nIdentify the audience, value proposition, industry, and emotional hook. Then generate 40 brandable name candidates a founder would actually use as their company name.`
   );
 }

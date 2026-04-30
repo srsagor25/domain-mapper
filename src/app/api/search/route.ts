@@ -7,8 +7,7 @@ import {
 import {
   generateAINames,
   generateNamesFromBusiness,
-  AIKeyError,
-  isProvider,
+  AIError,
 } from "@/lib/ai";
 import { checkDomains, DomainResult } from "@/lib/domain-checker";
 
@@ -81,36 +80,6 @@ function jsonError(message: string, status: number): Response {
 
 export async function POST(request: NextRequest) {
   try {
-    const providerHeader = request.headers.get("x-ai-provider")?.trim();
-    if (!providerHeader || !isProvider(providerHeader)) {
-      return jsonError(
-        "Missing or invalid AI provider. Choose OpenAI, Anthropic, or Google in the app.",
-        400
-      );
-    }
-    const provider = providerHeader;
-
-    const apiKey = request.headers.get("x-api-key")?.trim();
-    if (!apiKey) {
-      return jsonError(
-        "Missing API key. Add your provider key in the app to continue.",
-        401
-      );
-    }
-
-    const expectedPrefix =
-      provider === "openai"
-        ? "sk-"
-        : provider === "anthropic"
-          ? "sk-ant-"
-          : "AIza";
-    if (!apiKey.startsWith(expectedPrefix)) {
-      return jsonError(
-        `${provider === "openai" ? "OpenAI" : provider === "anthropic" ? "Anthropic" : "Google"} API keys should start with '${expectedPrefix}'. Please check the value.`,
-        400
-      );
-    }
-
     const { query, mode } = await request.json();
 
     if (!query || typeof query !== "string" || query.trim().length === 0) {
@@ -147,11 +116,11 @@ export async function POST(request: NextRequest) {
         let aiNames: string[] = [];
         try {
           aiNames = isBusinessMode
-            ? await generateNamesFromBusiness(trimmedQuery, provider, apiKey)
-            : await generateAINames(trimmedQuery, provider, apiKey);
+            ? await generateNamesFromBusiness(trimmedQuery)
+            : await generateAINames(trimmedQuery);
         } catch (err) {
           const message =
-            err instanceof AIKeyError
+            err instanceof AIError
               ? err.message
               : "Failed to generate names. Please try again.";
           send({ type: "error", message });
