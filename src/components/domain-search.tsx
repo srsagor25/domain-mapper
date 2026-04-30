@@ -3,13 +3,43 @@
 import { useState, useRef, useEffect } from "react";
 
 const ALL_TLDS = [".com", ".ai", ".io", ".dev", ".app", ".co", ".xyz", ".tech"];
-const KEY_STORAGE = "openai_api_key";
 
+type Provider = "openai" | "anthropic" | "google";
 type Mode = "domain" | "business";
 
 interface DomainResult {
   domain: string;
   available: boolean;
+}
+
+const PROVIDER_LABEL: Record<Provider, string> = {
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  google: "Google",
+};
+
+const PROVIDER_PREFIX: Record<Provider, string> = {
+  openai: "sk-",
+  anthropic: "sk-ant-",
+  google: "AIza",
+};
+
+const PROVIDER_DOCS: Record<Provider, string> = {
+  openai: "https://platform.openai.com/api-keys",
+  anthropic: "https://console.anthropic.com/settings/keys",
+  google: "https://aistudio.google.com/apikey",
+};
+
+const PROVIDER_KEY_STORAGE: Record<Provider, string> = {
+  openai: "api_key_openai",
+  anthropic: "api_key_anthropic",
+  google: "api_key_google",
+};
+
+const SELECTED_PROVIDER_STORAGE = "selected_provider";
+
+function isProvider(v: string | null): v is Provider {
+  return v === "openai" || v === "anthropic" || v === "google";
 }
 
 function maskKey(key: string): string {
@@ -18,10 +48,12 @@ function maskKey(key: string): string {
 }
 
 function ApiKeyPanel({
+  provider,
   apiKey,
   onSave,
   onClear,
 }: {
+  provider: Provider;
   apiKey: string | null;
   onSave: (key: string) => void;
   onClear: () => void;
@@ -31,13 +63,16 @@ function ApiKeyPanel({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!apiKey) setEditing(true);
-  }, [apiKey]);
+    setEditing(!apiKey);
+    setValue("");
+    setError(null);
+  }, [apiKey, provider]);
 
   const handleSave = () => {
     const trimmed = value.trim();
-    if (!trimmed.startsWith("sk-")) {
-      setError("OpenAI keys start with 'sk-'.");
+    const prefix = PROVIDER_PREFIX[provider];
+    if (!trimmed.startsWith(prefix)) {
+      setError(`${PROVIDER_LABEL[provider]} keys start with '${prefix}'.`);
       return;
     }
     setError(null);
@@ -51,7 +86,7 @@ function ApiKeyPanel({
       <div className="mb-4 flex items-center justify-between rounded-xl border border-foreground/10 bg-foreground/[0.03] px-4 py-2.5">
         <div className="flex items-center gap-2 text-sm">
           <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-semibold text-emerald-600">
-            Key set
+            {PROVIDER_LABEL[provider]} key set
           </span>
           <span className="font-mono text-xs text-foreground/50">
             {maskKey(apiKey)}
@@ -81,10 +116,10 @@ function ApiKeyPanel({
     <div className="mb-4 rounded-xl border border-foreground/10 bg-foreground/[0.03] p-4">
       <div className="mb-2 flex items-center justify-between">
         <h2 className="text-sm font-semibold text-foreground">
-          Your OpenAI API key
+          Your {PROVIDER_LABEL[provider]} API key
         </h2>
         <a
-          href="https://platform.openai.com/api-keys"
+          href={PROVIDER_DOCS[provider]}
           target="_blank"
           rel="noopener noreferrer"
           className="text-xs text-foreground/50 underline-offset-2 hover:text-foreground/80 hover:underline"
@@ -93,8 +128,9 @@ function ApiKeyPanel({
         </a>
       </div>
       <p className="mb-3 text-xs leading-relaxed text-foreground/50">
-        Stored only in your browser. Sent per request to this server to call
-        OpenAI on your behalf — never logged, never persisted server-side.
+        Stored only in your browser. Sent per request to this server to call{" "}
+        {PROVIDER_LABEL[provider]} on your behalf — never logged, never
+        persisted server-side.
       </p>
       <div className="flex gap-2">
         <input
@@ -107,7 +143,7 @@ function ApiKeyPanel({
               handleSave();
             }
           }}
-          placeholder="sk-..."
+          placeholder={`${PROVIDER_PREFIX[provider]}...`}
           className="flex-1 rounded-lg border border-foreground/10 bg-background px-3 py-2 font-mono text-sm outline-none focus:border-foreground/30"
           autoFocus
         />
@@ -133,9 +169,50 @@ function ApiKeyPanel({
           </button>
         )}
       </div>
-      {error && (
-        <p className="mt-2 text-xs text-red-500">{error}</p>
-      )}
+      {error && <p className="mt-2 text-xs text-red-500">{error}</p>}
+    </div>
+  );
+}
+
+function ProviderSelector({
+  provider,
+  onChange,
+  keys,
+}: {
+  provider: Provider;
+  onChange: (next: Provider) => void;
+  keys: Record<Provider, string | null>;
+}) {
+  return (
+    <div className="mb-3 flex justify-center">
+      <div className="inline-flex gap-1 rounded-xl bg-foreground/[0.04] p-1">
+        {(["openai", "anthropic", "google"] as Provider[]).map((p) => {
+          const hasKey = !!keys[p];
+          const active = provider === p;
+          return (
+            <button
+              key={p}
+              type="button"
+              onClick={() => onChange(p)}
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                active
+                  ? "bg-foreground text-background"
+                  : "text-foreground/50 hover:text-foreground/80"
+              }`}
+            >
+              {PROVIDER_LABEL[p]}
+              {hasKey && (
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${
+                    active ? "bg-background/70" : "bg-emerald-500"
+                  }`}
+                  aria-label="Key set"
+                />
+              )}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -209,7 +286,12 @@ function DomainRow({ result }: { result: DomainResult }) {
 }
 
 export function DomainSearch() {
-  const [apiKey, setApiKey] = useState<string | null>(null);
+  const [provider, setProvider] = useState<Provider>("openai");
+  const [keys, setKeys] = useState<Record<Provider, string | null>>({
+    openai: null,
+    anthropic: null,
+    google: null,
+  });
   const [mode, setMode] = useState<Mode>("domain");
   const [query, setQuery] = useState("");
   const [businessIdea, setBusinessIdea] = useState("");
@@ -227,44 +309,65 @@ export function DomainSearch() {
   const [tldFilters, setTldFilters] = useState<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
 
+  const apiKey = keys[provider];
+
   useEffect(() => {
     try {
-      const stored = localStorage.getItem(KEY_STORAGE);
-      if (stored) setApiKey(stored);
+      const storedProvider = localStorage.getItem(SELECTED_PROVIDER_STORAGE);
+      if (isProvider(storedProvider)) setProvider(storedProvider);
+
+      const next: Record<Provider, string | null> = {
+        openai: localStorage.getItem(PROVIDER_KEY_STORAGE.openai),
+        anthropic: localStorage.getItem(PROVIDER_KEY_STORAGE.anthropic),
+        google: localStorage.getItem(PROVIDER_KEY_STORAGE.google),
+      };
+      setKeys(next);
     } catch {
-      // localStorage unavailable (private mode etc.) — user can still paste each time.
+      // localStorage unavailable — user can still paste each session.
     }
   }, []);
 
   const handleSaveKey = (key: string) => {
     try {
-      localStorage.setItem(KEY_STORAGE, key);
+      localStorage.setItem(PROVIDER_KEY_STORAGE[provider], key);
     } catch {
       // ignore
     }
-    setApiKey(key);
+    setKeys((prev) => ({ ...prev, [provider]: key }));
     setErrorMessage(null);
   };
 
   const handleClearKey = () => {
     try {
-      localStorage.removeItem(KEY_STORAGE);
+      localStorage.removeItem(PROVIDER_KEY_STORAGE[provider]);
     } catch {
       // ignore
     }
-    setApiKey(null);
+    setKeys((prev) => ({ ...prev, [provider]: null }));
+    resetResults();
+  };
+
+  const handleProviderChange = (next: Provider) => {
+    if (next === provider) return;
+    if (abortRef.current) abortRef.current.abort();
+    setProvider(next);
+    try {
+      localStorage.setItem(SELECTED_PROVIDER_STORAGE, next);
+    } catch {
+      // ignore
+    }
     resetResults();
   };
 
   const toggleTld = (tld: string) => {
     setTldFilters((prev) => {
-      const next = new Set(prev);
-      if (next.has(tld)) {
-        next.delete(tld);
+      const nextSet = new Set(prev);
+      if (nextSet.has(tld)) {
+        nextSet.delete(tld);
       } else {
-        next.add(tld);
+        nextSet.add(tld);
       }
-      return next;
+      return nextSet;
     });
   };
 
@@ -279,7 +382,9 @@ export function DomainSearch() {
 
   const search = async (q: string, searchMode: Mode) => {
     if (!apiKey) {
-      setErrorMessage("Add your OpenAI API key above to start searching.");
+      setErrorMessage(
+        `Add your ${PROVIDER_LABEL[provider]} API key above to start searching.`
+      );
       return;
     }
     if (!q.trim()) {
@@ -302,7 +407,8 @@ export function DomainSearch() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-openai-key": apiKey,
+          "x-ai-provider": provider,
+          "x-api-key": apiKey,
         },
         body: JSON.stringify({ query: q.trim(), mode: searchMode }),
         signal: controller.signal,
@@ -414,7 +520,14 @@ export function DomainSearch() {
 
   return (
     <div>
+      <ProviderSelector
+        provider={provider}
+        onChange={handleProviderChange}
+        keys={keys}
+      />
+
       <ApiKeyPanel
+        provider={provider}
         apiKey={apiKey}
         onSave={handleSaveKey}
         onClear={handleClearKey}

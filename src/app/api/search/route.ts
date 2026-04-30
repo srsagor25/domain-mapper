@@ -7,7 +7,8 @@ import {
 import {
   generateAINames,
   generateNamesFromBusiness,
-  OpenAIKeyError,
+  AIKeyError,
+  isProvider,
 } from "@/lib/ai";
 import { checkDomains, DomainResult } from "@/lib/domain-checker";
 
@@ -80,16 +81,32 @@ function jsonError(message: string, status: number): Response {
 
 export async function POST(request: NextRequest) {
   try {
-    const apiKey = request.headers.get("x-openai-key")?.trim();
+    const providerHeader = request.headers.get("x-ai-provider")?.trim();
+    if (!providerHeader || !isProvider(providerHeader)) {
+      return jsonError(
+        "Missing or invalid AI provider. Choose OpenAI, Anthropic, or Google in the app.",
+        400
+      );
+    }
+    const provider = providerHeader;
+
+    const apiKey = request.headers.get("x-api-key")?.trim();
     if (!apiKey) {
       return jsonError(
-        "Missing OpenAI API key. Add your key in the app to continue.",
+        "Missing API key. Add your provider key in the app to continue.",
         401
       );
     }
-    if (!apiKey.startsWith("sk-")) {
+
+    const expectedPrefix =
+      provider === "openai"
+        ? "sk-"
+        : provider === "anthropic"
+          ? "sk-ant-"
+          : "AIza";
+    if (!apiKey.startsWith(expectedPrefix)) {
       return jsonError(
-        "OpenAI API keys should start with 'sk-'. Please check the value.",
+        `${provider === "openai" ? "OpenAI" : provider === "anthropic" ? "Anthropic" : "Google"} API keys should start with '${expectedPrefix}'. Please check the value.`,
         400
       );
     }
@@ -130,11 +147,11 @@ export async function POST(request: NextRequest) {
         let aiNames: string[] = [];
         try {
           aiNames = isBusinessMode
-            ? await generateNamesFromBusiness(trimmedQuery, apiKey)
-            : await generateAINames(trimmedQuery, apiKey);
+            ? await generateNamesFromBusiness(trimmedQuery, provider, apiKey)
+            : await generateAINames(trimmedQuery, provider, apiKey);
         } catch (err) {
           const message =
-            err instanceof OpenAIKeyError
+            err instanceof AIKeyError
               ? err.message
               : "Failed to generate names. Please try again.";
           send({ type: "error", message });
