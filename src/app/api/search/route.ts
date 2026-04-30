@@ -4,7 +4,7 @@ import {
   generateExactDomains,
   expandWithTLDs,
 } from "@/lib/name-generator";
-import { generateAINames, generateNamesFromBusiness } from "@/lib/gemini";
+import { generateAINames, generateNamesFromBusiness } from "@/lib/ai";
 import { checkDomains, DomainResult } from "@/lib/domain-checker";
 
 // In-memory cache (24h TTL)
