@@ -1,19 +1,8 @@
-import OpenAI from "openai";
+import { GoogleGenAI } from "@google/genai";
 
-// OpenRouter exposes an OpenAI-compatible API.
-const client = new OpenAI({
-  apiKey: process.env.OPENROUTER_API_KEY,
-  baseURL: "https://openrouter.ai/api/v1",
-  defaultHeaders: {
-    "HTTP-Referer":
-      process.env.OPENROUTER_REFERER || "https://domain-mapper-lovat.vercel.app",
-    "X-Title": "Domain Mapper",
-  },
-});
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY ?? "" });
 
-// OpenRouter free-tier model. Override with OPENROUTER_MODEL if needed.
-const MODEL =
-  process.env.OPENROUTER_MODEL || "meta-llama/llama-3.3-70b-instruct:free";
+const MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
 
 export class AIError extends Error {
   status: number;
@@ -59,35 +48,41 @@ function sanitizeNames(text: string): string[] {
 }
 
 async function callModel(userPrompt: string): Promise<string[]> {
-  if (!process.env.OPENROUTER_API_KEY) {
+  if (!process.env.GEMINI_API_KEY) {
     throw new AIError(
-      "Server is missing OPENROUTER_API_KEY. Contact the administrator.",
+      "Server is missing GEMINI_API_KEY. Contact the administrator.",
       503
     );
   }
 
   try {
-    const completion = await client.chat.completions.create({
+    const response = await ai.models.generateContent({
       model: MODEL,
-      temperature: 0.9,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: userPrompt },
-      ],
+      contents: userPrompt,
+      config: {
+        systemInstruction: SYSTEM_PROMPT,
+        temperature: 0.9,
+      },
     });
-    const text = completion.choices[0]?.message?.content ?? "";
-    return sanitizeNames(text);
+
+    return sanitizeNames(response.text ?? "");
   } catch (err: unknown) {
     const e = err as { status?: number; message?: string };
     const status = e.status ?? 500;
     const msg = (e.message || "").toLowerCase();
 
     let message: string;
-    if (status === 401 || status === 403) {
-      message = "Server's OpenRouter key is invalid. Contact the administrator.";
+    if (
+      msg.includes("api_key_invalid") ||
+      msg.includes("api key not valid") ||
+      msg.includes("invalid api key") ||
+      status === 401 ||
+      status === 403
+    ) {
+      message = "Server's Gemini key is invalid. Contact the administrator.";
     } else if (status === 429 || msg.includes("rate") || msg.includes("quota")) {
       message =
-        "OpenRouter rate limit hit. Free-tier models share quota — try again in a moment.";
+        "Gemini rate limit hit. Free tier shares quota — try again in a moment.";
     } else {
       message = "Failed to generate names. Please try again.";
     }
