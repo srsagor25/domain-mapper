@@ -5,10 +5,11 @@ import { useState, useRef, useEffect } from "react";
 const ALL_TLDS = [".com", ".ai", ".io", ".dev", ".app", ".co", ".xyz", ".tech"];
 
 type Mode = "domain" | "business";
+type DomainStatus = "available" | "taken" | "unknown" | "checking";
 
 interface DomainResult {
   domain: string;
-  available: boolean;
+  status: DomainStatus;
 }
 
 function SkeletonRow() {
@@ -43,34 +44,61 @@ function DomainRow({ result }: { result: DomainResult }) {
   const tldIndex = result.domain.indexOf(".");
   const name = result.domain.slice(0, tldIndex);
   const tld = result.domain.slice(tldIndex);
+  const isAvailable = result.status === "available";
+  const isUnknown = result.status === "unknown";
+  const isChecking = result.status === "checking";
 
   return (
     <div
       className={`flex items-center justify-between rounded-lg px-4 py-3 transition-all duration-200 ${
-        result.available
+        isAvailable
           ? "bg-emerald-500/[0.06] hover:bg-emerald-500/[0.1]"
-          : "bg-foreground/[0.02] hover:bg-foreground/[0.04]"
+          : isUnknown
+            ? "bg-amber-500/[0.05] hover:bg-amber-500/[0.08]"
+            : isChecking
+              ? "bg-foreground/[0.02]"
+              : "bg-foreground/[0.02] hover:bg-foreground/[0.04]"
       }`}
     >
       <span
         className={`font-mono text-sm ${
-          result.available
+          isAvailable
             ? "font-medium text-foreground"
-            : "text-foreground/35 line-through decoration-foreground/15"
+            : isUnknown
+              ? "text-foreground/55"
+              : isChecking
+                ? "text-foreground/50"
+                : "text-foreground/35 line-through decoration-foreground/15"
         }`}
       >
         {name}
         <span
           className={
-            result.available ? "text-foreground/50" : "text-foreground/25"
+            isAvailable
+              ? "text-foreground/50"
+              : isUnknown || isChecking
+                ? "text-foreground/40"
+                : "text-foreground/25"
           }
         >
           {tld}
         </span>
       </span>
-      {result.available ? (
+      {isAvailable ? (
         <span className="rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-xs font-semibold text-emerald-600">
           Available
+        </span>
+      ) : isUnknown ? (
+        <span
+          className="rounded-full bg-amber-500/10 px-2.5 py-0.5 text-xs font-semibold text-amber-600"
+          title="Registry didn't respond — check manually"
+        >
+          Unknown
+        </span>
+      ) : isChecking ? (
+        <span className="flex items-center gap-1.5 text-xs text-foreground/40">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-foreground/30" />
+          Checking
         </span>
       ) : (
         <span className="text-xs text-foreground/25">Taken</span>
@@ -87,7 +115,7 @@ export function DomainSearch() {
   const [exactResults, setExactResults] = useState<DomainResult[]>([]);
   const [suggestions, setSuggestions] = useState<DomainResult[]>([]);
   const [phase, setPhase] = useState<
-    "idle" | "exact" | "suggestions" | "done"
+    "idle" | "exact" | "suggestions" | "checking" | "done"
   >("idle");
   const [stats, setStats] = useState({ total: 0, available: 0 });
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -160,6 +188,7 @@ export function DomainSearch() {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let sawSuggestionsDone = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -177,7 +206,22 @@ export function DomainSearch() {
             setBaseName(data.baseName);
             setExactResults(data.results);
             setPhase("suggestions");
-          } else if (data.type === "suggestions") {
+          } else if (data.type === "suggestions-start") {
+            setSuggestions(
+              data.domains.map((domain: string) => ({
+                domain,
+                status: "checking" as const,
+              }))
+            );
+            setPhase("checking");
+          } else if (data.type === "result") {
+            setSuggestions((prev) =>
+              prev.map((s) =>
+                s.domain === data.domain ? { ...s, status: data.status } : s
+              )
+            );
+          } else if (data.type === "suggestions-done") {
+            sawSuggestionsDone = true;
             setSuggestions(data.results);
             setStats({ total: data.total, available: data.available });
             setPhase("done");
@@ -186,6 +230,16 @@ export function DomainSearch() {
             setPhase("done");
           }
         }
+      }
+
+      // If the server got cut off mid-stream (e.g. Vercel timeout), mark any
+      // still-pending rows as unknown so the UI isn't stuck on "checking".
+      if (!sawSuggestionsDone) {
+        setSuggestions((prev) =>
+          prev.map((s) =>
+            s.status === "checking" ? { ...s, status: "unknown" } : s
+          )
+        );
       }
     } catch (error: unknown) {
       if ((error as Error).name !== "AbortError") {
@@ -232,8 +286,8 @@ export function DomainSearch() {
 
   const applyFilters = (results: DomainResult[]) =>
     results.filter((r) => {
-      if (statusFilter === "available" && !r.available) return false;
-      if (statusFilter === "taken" && r.available) return false;
+      if (statusFilter === "available" && r.status !== "available") return false;
+      if (statusFilter === "taken" && r.status !== "taken") return false;
       if (tldFilters.size > 0) {
         const tld = r.domain.slice(r.domain.indexOf("."));
         if (!tldFilters.has(tld)) return false;
@@ -241,10 +295,15 @@ export function DomainSearch() {
       return true;
     });
 
-  const isLoading = phase === "exact" || phase === "suggestions";
-  const hasResults = phase === "suggestions" || phase === "done";
+  const isLoading =
+    phase === "exact" || phase === "suggestions" || phase === "checking";
+  const hasResults =
+    phase === "suggestions" || phase === "checking" || phase === "done";
   const showExactSection =
     mode === "domain" && hasResults && exactResults.length > 0;
+  const checkingCount = suggestions.filter(
+    (s) => s.status === "checking"
+  ).length;
 
   return (
     <div>
@@ -345,9 +404,15 @@ export function DomainSearch() {
             <span className="font-semibold text-emerald-600">
               {phase === "done"
                 ? stats.available
-                : exactResults.filter((r) => r.available).length}
+                : exactResults.filter((r) => r.status === "available").length +
+                  suggestions.filter((s) => s.status === "available").length}
             </span>{" "}
             available
+            {phase === "checking" && checkingCount > 0 && (
+              <span className="ml-2 text-foreground/40">
+                · checking {checkingCount} more…
+              </span>
+            )}
             {phase === "done" && (
               <>
                 {" "}
@@ -434,7 +499,7 @@ export function DomainSearch() {
         />
       )}
 
-      {phase === "done" && suggestions.length > 0 && (
+      {(phase === "checking" || phase === "done") && suggestions.length > 0 && (
         <div className="mt-6">
           <div className="mb-3 flex items-center gap-2">
             <div className="h-2 w-2 rounded-full bg-purple-500" />

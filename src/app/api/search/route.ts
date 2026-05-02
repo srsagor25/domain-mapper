@@ -26,7 +26,10 @@ function setCache(result: DomainResult) {
   cache.set(result.domain, { result, expires: Date.now() + CACHE_TTL });
 }
 
-async function checkWithCache(domains: string[]): Promise<DomainResult[]> {
+async function checkWithCache(
+  domains: string[],
+  onResult?: (result: DomainResult) => void
+): Promise<DomainResult[]> {
   const unchecked: string[] = [];
   const cachedResults: DomainResult[] = [];
 
@@ -34,13 +37,16 @@ async function checkWithCache(domains: string[]): Promise<DomainResult[]> {
     const cached = getCached(domain);
     if (cached) {
       cachedResults.push(cached);
+      onResult?.(cached);
     } else {
       unchecked.push(domain);
     }
   }
 
-  const freshResults = await checkDomains(unchecked);
-  for (const result of freshResults) setCache(result);
+  const freshResults = await checkDomains(unchecked, (r) => {
+    setCache(r);
+    onResult?.(r);
+  });
 
   return [...cachedResults, ...freshResults];
 }
@@ -57,13 +63,17 @@ function sortByAvailability(results: DomainResult[]): DomainResult[] {
   const sortedGroups = Array.from(grouped.entries()).sort(
     ([, aResults], [, bResults]) => {
       const aComAvail =
-        aResults.find((r) => r.domain.endsWith(".com"))?.available ?? false;
+        aResults.find((r) => r.domain.endsWith(".com"))?.status ===
+        "available";
       const bComAvail =
-        bResults.find((r) => r.domain.endsWith(".com"))?.available ?? false;
+        bResults.find((r) => r.domain.endsWith(".com"))?.status ===
+        "available";
       if (aComAvail !== bComAvail) return aComAvail ? -1 : 1;
 
-      const aAvailCount = aResults.filter((r) => r.available).length;
-      const bAvailCount = bResults.filter((r) => r.available).length;
+      const aAvailCount = aResults.filter((r) => r.status === "available")
+        .length;
+      const bAvailCount = bResults.filter((r) => r.status === "available")
+        .length;
       return bAvailCount - aAvailCount;
     }
   );
@@ -130,16 +140,35 @@ export async function POST(request: NextRequest) {
 
         const uniqueNames = aiNames.filter((name) => name !== baseName);
         const suggestionDomains = expandWithTLDs(uniqueNames);
-        const suggestionResults = await checkWithCache(suggestionDomains);
+
+        // Tell the client every domain we're about to check, so it can
+        // render rows immediately with a "checking…" status. Individual
+        // results stream in as RDAP responses come back.
+        send({
+          type: "suggestions-start",
+          domains: suggestionDomains,
+        });
+
+        const suggestionResults = await checkWithCache(
+          suggestionDomains,
+          (result) => {
+            send({
+              type: "result",
+              domain: result.domain,
+              status: result.status,
+            });
+          }
+        );
+
         const sortedResults = sortByAvailability(suggestionResults);
 
         send({
-          type: "suggestions",
+          type: "suggestions-done",
           results: sortedResults,
           total: exactResults.length + sortedResults.length,
           available:
-            exactResults.filter((r) => r.available).length +
-            sortedResults.filter((r) => r.available).length,
+            exactResults.filter((r) => r.status === "available").length +
+            sortedResults.filter((r) => r.status === "available").length,
         });
 
         controller.close();
