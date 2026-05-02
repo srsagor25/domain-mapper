@@ -2,7 +2,10 @@ import { GoogleGenAI } from "@google/genai";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY ?? "" });
 
-const MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+// gemini-2.5-flash-lite has reliable free-tier quota. Some accounts get
+// limit:0 on the non-lite models (gemini-2.0-flash, gemini-2.5-flash) until
+// billing is enabled. Override via GEMINI_MODEL env var if needed.
+const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
 
 export class AIError extends Error {
   status: number;
