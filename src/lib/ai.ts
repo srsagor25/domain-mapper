@@ -68,6 +68,13 @@ async function callModel(userPrompt: string): Promise<string[]> {
     return sanitizeNames(response.text ?? "");
   } catch (err: unknown) {
     const e = err as { status?: number; message?: string };
+    // Log full error to Vercel function logs so we can diagnose
+    // misclassifications (e.g. real auth errors getting tagged as rate-limit).
+    console.error("Gemini API error:", {
+      status: e.status,
+      message: e.message,
+      raw: err,
+    });
     const status = e.status ?? 500;
     const msg = (e.message || "").toLowerCase();
 
