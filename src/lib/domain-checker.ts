@@ -17,6 +17,8 @@ const RDAP_SERVERS: Record<string, string> = {
   ".app": "https://pubapi.registry.google/rdap/domain/",
   ".xyz": "https://rdap.centralnic.com/xyz/domain/",
   ".tech": "https://rdap.radix.host/rdap/domain/",
+  ".studio": "https://rdap.identitydigital.services/rdap/domain/",
+  ".agency": "https://rdap.identitydigital.services/rdap/domain/",
   // .co has no public RDAP we can rely on; falls through to DNS.
 };
 

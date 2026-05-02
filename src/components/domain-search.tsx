@@ -2,7 +2,18 @@
 
 import { useState, useRef, useEffect } from "react";
 
-const ALL_TLDS = [".com", ".ai", ".io", ".dev", ".app", ".co", ".xyz", ".tech"];
+const ALL_TLDS = [
+  ".com",
+  ".ai",
+  ".io",
+  ".dev",
+  ".app",
+  ".co",
+  ".xyz",
+  ".tech",
+  ".studio",
+  ".agency",
+];
 
 type Mode = "domain" | "business";
 type DomainStatus = "available" | "taken" | "unknown" | "checking";

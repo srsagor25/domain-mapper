@@ -1,4 +1,15 @@
-const TLDS = [".com", ".ai", ".io", ".dev", ".app", ".co", ".xyz", ".tech"];
+const TLDS = [
+  ".com",
+  ".ai",
+  ".io",
+  ".dev",
+  ".app",
+  ".co",
+  ".xyz",
+  ".tech",
+  ".studio",
+  ".agency",
+];
 
 /**
  * Parse user input to extract the base name and detect TLD.
